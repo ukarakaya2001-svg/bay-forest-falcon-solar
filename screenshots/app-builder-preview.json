@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Aether",
+      "hasCanvas": false,
+      "bodyTextLen": 1052,
+      "bodyTextHash": "e21ce8e7c63e37b270e5043c8befa56792fbb3f2941333e72c80b834ea059d11",
+      "bodyTextPrefix": "Aether Açık alan Sözdizimi TR EN Aether Bir dil. Bütün diller. A",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Aether",
+      "hasCanvas": false,
+      "bodyTextLen": 1052,
+      "bodyTextHash": "e21ce8e7c63e37b270e5043c8befa56792fbb3f2941333e72c80b834ea059d11",
+      "bodyTextPrefix": "Aether Açık alan Sözdizimi TR EN Aether Bir dil. Bütün diller. A",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
