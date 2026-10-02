@@ -1,11 +1,11 @@
-import { i as __toESM } from "../_runtime.mjs";
+import { o as __toESM } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { S as require_jsx_runtime, b as Link, p as useRouterState } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
 import { t as create } from "../_libs/zustand.mjs";
 import { t as Slot } from "../_libs/radix-ui__react-slot.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/highlight-BhGFhx_-.js
+//#region node_modules/.nitro/vite/services/ssr/assets/highlight-LGEX9ycG.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 function cn(...inputs) {
@@ -301,7 +301,9 @@ var KEYWORDS = {
 	or: "or",
 	not: "not"
 };
+var MAX_SOURCE_LENGTH = 1e6;
 function lex(source) {
+	if (source.length > MAX_SOURCE_LENGTH) throw new LexError(`Source exceeds the ${MAX_SOURCE_LENGTH}-character limit`, 1, 1);
 	const tokens = [];
 	let i = 0;
 	let line = 1;
@@ -775,8 +777,19 @@ var KW = /* @__PURE__ */ new Set([
 	"or",
 	"not"
 ]);
+var MAX_HIGHLIGHT_CHARS = 1e6;
+var MAX_HIGHLIGHT_RENDER_CHARS = 2e4;
+var ALLOWED_SPAN = /^<span class="tok-(?:comment|str|num|kw|type|fn|ident|punct)">$/;
 function esc(s) {
-	return s.replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">");
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+/** Defense in depth: only tok-* spans may survive into dangerouslySetInnerHTML. */
+function sanitizeHighlightHtml(html) {
+	return html.replace(/<\/?[^>]*>/g, (tag) => {
+		if (tag === "</span>") return tag;
+		if (ALLOWED_SPAN.test(tag)) return tag;
+		return "";
+	});
 }
 function cls(tok, next) {
 	if (tok.kind === "comment") return "tok-comment";
@@ -788,25 +801,30 @@ function cls(tok, next) {
 	if (tok.kind === "ident") return "tok-ident";
 	return "tok-punct";
 }
+function boundedSource(source) {
+	if (source.length <= MAX_HIGHLIGHT_CHARS) return source;
+	return `${source.slice(0, MAX_HIGHLIGHT_RENDER_CHARS)}\n/* truncated */`;
+}
 function highlightAether(source) {
+	const input = boundedSource(source);
 	let tokens;
 	try {
-		tokens = lex(source);
+		tokens = lex(input);
 	} catch {
-		return esc(source);
+		return sanitizeHighlightHtml(esc(input));
 	}
 	let html = "";
 	let i = 0;
 	for (let k = 0; k < tokens.length; k++) {
 		const t = tokens[k];
 		if (t.kind === "eof") break;
-		if (t.pos > i) html += esc(source.slice(i, t.pos));
+		if (t.pos > i) html += esc(input.slice(i, t.pos));
 		const next = tokens[k + 1];
 		html += `<span class="${cls(t, next)}">${esc(t.lexeme)}</span>`;
 		i = t.pos + t.lexeme.length;
 	}
-	if (i < source.length) html += esc(source.slice(i));
-	return html;
+	if (i < input.length) html += esc(input.slice(i));
+	return sanitizeHighlightHtml(html);
 }
 var LANG_KW = {
 	javascript: [
@@ -1111,48 +1129,49 @@ var LANG_KW = {
 	]
 };
 function highlightTarget(source, id) {
+	const input = boundedSource(source);
 	const kws = new Set(LANG_KW[id] ?? []);
 	const comment = TARGETS.find((t) => t.id === id)?.comment ?? "//";
 	let html = "";
 	let i = 0;
-	const n = source.length;
+	const n = input.length;
 	const take = (end, clsName) => {
-		html += `<span class="${clsName}">${esc(source.slice(i, end))}</span>`;
+		html += `<span class="${clsName}">${esc(input.slice(i, end))}</span>`;
 		i = end;
 	};
 	while (i < n) {
-		if (source.startsWith(comment, i)) {
-			let e = source.indexOf("\n", i);
+		if (input.startsWith(comment, i)) {
+			let e = input.indexOf("\n", i);
 			if (e < 0) e = n;
 			take(e, "tok-comment");
 			continue;
 		}
-		const c = source[i];
+		const c = input[i];
 		if (c === "\"" || c === "'") {
 			const q = c;
 			let j = i + 1;
-			while (j < n && source[j] !== q) if (source[j] === "\\") j += 2;
+			while (j < n && input[j] !== q) if (input[j] === "\\") j += 2;
 			else j += 1;
 			take(Math.min(j + 1, n), "tok-str");
 			continue;
 		}
 		if (c >= "0" && c <= "9") {
 			let j = i;
-			while (j < n && /[0-9.]/.test(source[j])) j += 1;
+			while (j < n && /[0-9.]/.test(input[j])) j += 1;
 			take(j, "tok-num");
 			continue;
 		}
 		if (/[A-Za-z_]/.test(c)) {
 			let j = i;
-			while (j < n && /[A-Za-z0-9_]/.test(source[j])) j += 1;
-			const word = source.slice(i, j);
+			while (j < n && /[A-Za-z0-9_]/.test(input[j])) j += 1;
+			const word = input.slice(i, j);
 			take(j, kws.has(word) ? "tok-kw" : "tok-ident");
 			continue;
 		}
 		html += esc(c);
 		i += 1;
 	}
-	return html;
+	return sanitizeHighlightHtml(html);
 }
 //#endregion
 export { LexError as a, highlightAether as c, targetById as d, useCopy as f, CodePane as i, highlightTarget as l, AppShell as n, TARGETS as o, useLocale as p, Button as r, cn as s, AetherMark as t, lex as u };

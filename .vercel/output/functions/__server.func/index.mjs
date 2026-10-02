@@ -150,6 +150,10 @@ function readGrokProjectId() {
 	const fromProcess = typeof process !== "undefined" ? process.env?.VITE_PROJECT_ID : "";
 	return String(fromProcess ?? "").trim();
 }
+function readGrokExtensionsEnabled() {
+	const fromProcess = typeof process !== "undefined" ? process.env?.VITE_GROK_EXTENSIONS : "";
+	return String(fromProcess ?? "").trim() !== "0";
+}
 function readXCreator() {
 	const fromProcess = typeof process !== "undefined" ? process.env?.X_CREATOR : "";
 	return String(fromProcess ?? "").trim();
@@ -169,6 +173,7 @@ function grokExtensionsHeadTags(projectId = readGrokProjectId()) {
 	const id = escapeHtml(projectId);
 	const tags = [];
 	if (projectId) tags.push(`<meta name="grok-project-id" content="${id}">`);
+	if (!readGrokExtensionsEnabled()) return tags;
 	tags.push(`<script src="${GROK_EXTENSIONS_SCRIPT_SRC}"${projectId ? ` data-project-id="${id}"` : ""} defer><\/script>`);
 	return tags;
 }
@@ -268,6 +273,9 @@ function grokOgHeadTags({ host = "", appName = DEFAULT_APP_NAME, site = {}, docu
 	}
 	return tags;
 }
+function stripGrokExtensionsScript(html) {
+	return String(html).replace(/<script\b[^>]*\bsrc\s*=\s*["'][^"']*\/grok-app-builder\/extensions\.js[^"']*["'][^>]*>\s*<\/script>/gi, "");
+}
 function stripShareMetaTags(html) {
 	return String(html).replace(/<meta\b[^>]*>/gi, (tag) => {
 		const attrs = [...tag.matchAll(/\b(?:property|name)\s*=\s*["']([^"']+)["']/gi)];
@@ -303,6 +311,7 @@ function injectGrokPwaHead(html, ctx = {}) {
 	const documentTitle = titleFromDocument(html);
 	const appName = resolveOgTitle(site, ctx.appName ?? "Grok App", host, documentTitle);
 	let next = stripShareMetaTags(html);
+	if (!readGrokExtensionsEnabled()) next = stripGrokExtensionsScript(next);
 	const missing = grokPwaHeadTags(appName).filter(([key]) => {
 		if (key === "manifest") return !next.includes("href=\"/__grok/manifest.webmanifest\"");
 		if (key === "apple-touch-icon") return !next.includes("href=\"/__grok/icon-180.png\"");
@@ -315,7 +324,7 @@ function injectGrokPwaHead(html, ctx = {}) {
 		documentTitle,
 		cwd
 	}).join(""));
-	if (!next.includes("/grok-app-builder/extensions.js")) missing.push(...grokExtensionsHeadTags(projectId));
+	if (readGrokExtensionsEnabled() && !next.includes("/grok-app-builder/extensions.js")) missing.push(...grokExtensionsHeadTags(projectId));
 	else if (projectId && !next.includes("name=\"grok-project-id\"")) missing.push(`<meta name="grok-project-id" content="${escapeHtml(projectId)}">`);
 	if (projectId && !next.includes("property=\"grok:app_id\"") && !next.includes("property='grok:app_id'")) missing.push(`<meta property="grok:app_id" content="${escapeHtml(projectId)}">`);
 	const creatorTags = grokXCreatorHeadTags(creator, creatorId);
@@ -394,6 +403,14 @@ function createHeadInjector(ctx = {}) {
 function requestHost(event) {
 	return event.req.headers.get("x-forwarded-host") ?? event.req.headers.get("host") ?? event.url.host;
 }
+function securityHeaders(headers) {
+	headers.set("x-content-type-options", "nosniff");
+	headers.set("referrer-policy", "strict-origin-when-cross-origin");
+	headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), usb=(), payment=()");
+	headers.set("cross-origin-opener-policy", "same-origin");
+	headers.set("x-dns-prefetch-control", "off");
+	return headers;
+}
 function injectHeadStreaming(response, host) {
 	const injector = createHeadInjector({
 		host,
@@ -407,7 +424,7 @@ function injectHeadStreaming(response, host) {
 			for (const out of injector.flush()) controller.enqueue(out);
 		}
 	}));
-	const headers = new Headers(response.headers);
+	const headers = securityHeaders(new Headers(response.headers));
 	headers.delete("content-length");
 	return new Response(transformed, {
 		status: response.status,
@@ -419,19 +436,19 @@ async function grokPwaMiddleware(event, next) {
 	if ((event.req.method ?? "GET").toUpperCase() !== "GET") return next();
 	const path = event.url.pathname;
 	const urlWithQuery = path + event.url.search;
-	if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") return new Response(renderWebManifest(requestHost(event)), { headers: {
+	if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") return new Response(renderWebManifest(requestHost(event)), { headers: securityHeaders(new Headers({
 		"content-type": "application/manifest+json; charset=utf-8",
 		"cache-control": "no-cache"
-	} });
+	})) });
 	if (isInstallQuery(urlWithQuery) && isDocumentPath(path) && acceptsHtml(event.req.headers.get("accept"))) {
 		const html = renderInstallPageHtml(install_page_default, {
 			host: requestHost(event),
 			url: urlWithQuery
 		});
-		return new Response(html, { headers: {
+		return new Response(html, { headers: securityHeaders(new Headers({
 			"content-type": "text/html; charset=utf-8",
 			"cache-control": "no-cache"
-		} });
+		})) });
 	}
 	if (!isDocumentPath(path)) return next();
 	const result = await next();

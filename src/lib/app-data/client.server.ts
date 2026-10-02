@@ -32,7 +32,18 @@ type InboundContext = {
 
 function connectorsBaseFor(publicHost: string | null): string | null {
   const explicit = env("GROK_CONNECTORS_URL");
-  if (explicit) return explicit.replace(/\/+$/, "");
+  if (explicit) {
+    try {
+      const url = new URL(explicit);
+      const allowedHosts = new Set([CONNECTORS_HOST_PROD, CONNECTORS_HOST_STAGING]);
+      if (url.protocol !== "https:" || !allowedHosts.has(url.hostname.toLowerCase()) || url.username || url.password) {
+        return null;
+      }
+      return url.href.replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
+  }
 
   const host = publicHost?.toLowerCase();
   if (!host || isLoopbackHost(host)) return null;
@@ -173,9 +184,13 @@ function gateSigninUrl(ctx: InboundContext): string | undefined {
   const base = ctx.connectorsBase;
   if (!base) return undefined;
   try {
-    const connectorsHost = new URL(base).host.toLowerCase();
-    const gateHost = connectorsHost.replace(/^connectors\./, "gate.");
-    if (gateHost === connectorsHost) return undefined;
+    const connectorsHost = new URL(base).hostname.toLowerCase();
+    const gateHost = connectorsHost === CONNECTORS_HOST_PROD
+      ? "gate.grok.me"
+      : connectorsHost === CONNECTORS_HOST_STAGING
+        ? "gate.app-builder-testing.com"
+        : null;
+    if (!gateHost) return undefined;
     const publicHost = ctx.publicHost?.toLowerCase();
     const gated =
       publicHost && !isLoopbackHost(publicHost)
@@ -185,6 +200,18 @@ function gateSigninUrl(ctx: InboundContext): string | undefined {
     return gated
       ? `${signin}?return_to=${encodeURIComponent(gated)}`
       : signin;
+  } catch {
+    return undefined;
+  }
+}
+
+function trustedGateLoginUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/__gate/signin") return undefined;
+    if (url.hostname !== "gate.grok.me" && url.hostname !== "gate.app-builder-testing.com") return undefined;
+    return url.href;
   } catch {
     return undefined;
   }
@@ -229,11 +256,7 @@ function unauthorizedResult(
     noteTokenRejected(token);
     return pendingTokenResult(PENDING_TOKEN_REJECTED);
   }
-  const loginUrl =
-    gateSigninUrl(ctx) ??
-    (typeof json.loginUrl === "string" && json.loginUrl
-      ? json.loginUrl
-      : undefined);
+  const loginUrl = gateSigninUrl(ctx) ?? trustedGateLoginUrl(json.loginUrl);
   return {
     ok: false,
     data: null,
@@ -278,7 +301,9 @@ function tokenIdentityKey(token: string): string {
             .digest("base64url");
         }
       }
-    } catch {}
+    } catch {
+      /* ignore malformed JWT payloads */
+    }
   }
   return createHash("sha256").update(token).digest("base64url");
 }

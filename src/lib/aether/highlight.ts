@@ -22,8 +22,26 @@ const KW = new Set([
   "not",
 ]);
 
+const MAX_HIGHLIGHT_CHARS = 1_000_000;
+const MAX_HIGHLIGHT_RENDER_CHARS = 20_000;
+const ALLOWED_SPAN = /^<span class="tok-(?:comment|str|num|kw|type|fn|ident|punct)">$/;
+
 function esc(s: string) {
-  return s.replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">");
+  return s
+    .replace(/&/g, "\u0026amp;")
+    .replace(/</g, "\u0026lt;")
+    .replace(/>/g, "\u0026gt;")
+    .replace(/"/g, "\u0026quot;")
+    .replace(/'/g, "\u0026#39;");
+}
+
+/** Defense in depth: only tok-* spans may survive into dangerouslySetInnerHTML. */
+export function sanitizeHighlightHtml(html: string): string {
+  return html.replace(/<\/?[^>]*>/g, (tag) => {
+    if (tag === "</span>") return tag;
+    if (ALLOWED_SPAN.test(tag)) return tag;
+    return "";
+  });
 }
 
 function cls(tok: Token, next: Token | undefined): string {
@@ -37,25 +55,31 @@ function cls(tok: Token, next: Token | undefined): string {
   return "tok-punct";
 }
 
+function boundedSource(source: string): string {
+  if (source.length <= MAX_HIGHLIGHT_CHARS) return source;
+  return `${source.slice(0, MAX_HIGHLIGHT_RENDER_CHARS)}\n/* truncated */`;
+}
+
 export function highlightAether(source: string): string {
+  const input = boundedSource(source);
   let tokens: Token[];
   try {
-    tokens = lex(source);
+    tokens = lex(input);
   } catch {
-    return esc(source);
+    return sanitizeHighlightHtml(esc(input));
   }
   let html = "";
   let i = 0;
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k]!;
     if (t.kind === "eof") break;
-    if (t.pos > i) html += esc(source.slice(i, t.pos));
+    if (t.pos > i) html += esc(input.slice(i, t.pos));
     const next = tokens[k + 1];
     html += `<span class="${cls(t, next)}">${esc(t.lexeme)}</span>`;
     i = t.pos + t.lexeme.length;
   }
-  if (i < source.length) html += esc(source.slice(i));
-  return html;
+  if (i < input.length) html += esc(input.slice(i));
+  return sanitizeHighlightHtml(html);
 }
 
 const LANG_KW: Record<string, string[]> = {
@@ -80,30 +104,31 @@ const LANG_KW: Record<string, string[]> = {
 };
 
 export function highlightTarget(source: string, id: TargetId): string {
+  const input = boundedSource(source);
   const kws = new Set(LANG_KW[id] ?? []);
   const comment = TARGETS.find((t) => t.id === id)?.comment ?? "//";
   let html = "";
   let i = 0;
-  const n = source.length;
+  const n = input.length;
 
   const take = (end: number, clsName: string) => {
-    html += `<span class="${clsName}">${esc(source.slice(i, end))}</span>`;
+    html += `<span class="${clsName}">${esc(input.slice(i, end))}</span>`;
     i = end;
   };
 
   while (i < n) {
-    if (source.startsWith(comment, i)) {
-      let e = source.indexOf("\n", i);
+    if (input.startsWith(comment, i)) {
+      let e = input.indexOf("\n", i);
       if (e < 0) e = n;
       take(e, "tok-comment");
       continue;
     }
-    const c = source[i]!;
+    const c = input[i]!;
     if (c === '"' || c === "'") {
       const q = c;
       let j = i + 1;
-      while (j < n && source[j] !== q) {
-        if (source[j] === "\\") j += 2;
+      while (j < n && input[j] !== q) {
+        if (input[j] === "\\") j += 2;
         else j += 1;
       }
       take(Math.min(j + 1, n), "tok-str");
@@ -111,19 +136,19 @@ export function highlightTarget(source: string, id: TargetId): string {
     }
     if (c >= "0" && c <= "9") {
       let j = i;
-      while (j < n && /[0-9.]/.test(source[j]!)) j += 1;
+      while (j < n && /[0-9.]/.test(input[j]!)) j += 1;
       take(j, "tok-num");
       continue;
     }
     if (/[A-Za-z_]/.test(c)) {
       let j = i;
-      while (j < n && /[A-Za-z0-9_]/.test(source[j]!)) j += 1;
-      const word = source.slice(i, j);
+      while (j < n && /[A-Za-z0-9_]/.test(input[j]!)) j += 1;
+      const word = input.slice(i, j);
       take(j, kws.has(word) ? "tok-kw" : "tok-ident");
       continue;
     }
     html += esc(c);
     i += 1;
   }
-  return html;
+  return sanitizeHighlightHtml(html);
 }

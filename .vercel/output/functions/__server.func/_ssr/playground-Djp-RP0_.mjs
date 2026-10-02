@@ -1,12 +1,12 @@
-import { i as __toESM } from "../_runtime.mjs";
+import { o as __toESM } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { S as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
-import { c as highlightAether, f as useCopy, i as CodePane, l as highlightTarget, n as AppShell, o as TARGETS, p as useLocale, r as Button, s as cn } from "./highlight-BhGFhx_-.mjs";
+import { c as highlightAether, f as useCopy, i as CodePane, l as highlightTarget, n as AppShell, o as TARGETS, p as useLocale, r as Button, s as cn } from "./highlight-LGEX9ycG.mjs";
 import { a as Check, i as Copy, n as RotateCcw, r as Play } from "../_libs/lucide-react.mjs";
-import { n as Route } from "./router-DMhwwpuf.mjs";
-import { n as run, t as emit } from "./aether-D2AFMzg8.mjs";
+import { n as Route$1 } from "./router-DI17fM0c.mjs";
+import { n as run, t as emit } from "./aether-D-y4C89j.mjs";
 import { n as pn, r as yn, t as bn } from "../_libs/react-resizable-panels.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/playground-DYJ4K-gu.js
+//#region node_modules/.nitro/vite/services/ssr/assets/playground-Djp-RP0_.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var EXAMPLES = [
@@ -516,7 +516,7 @@ function ConsoleBody({ text, error }) {
 	});
 }
 function PlaygroundPage() {
-	const { ex, src, lang } = Route.useSearch();
+	const { ex, src, lang } = Route$1.useSearch();
 	let initialSource;
 	if (src) try {
 		initialSource = decodeURIComponent(atob(src));

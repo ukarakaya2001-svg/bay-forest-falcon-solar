@@ -29,6 +29,8 @@ export interface SignalRow {
 export interface RtcPollResponse {
   peers: PeerRow[];
   signals: SignalRow[];
+  /** Opaque capability issued by the signaling server for this peer session. */
+  token: string;
 }
 
 export interface PeerInfo {
@@ -80,17 +82,20 @@ const PING_INTERVAL_MS = 2000;
 const STALL_MS = 10_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
 const SIGNAL_RETRY_DELAYS_MS = [250, 750];
+const DEFAULT_STUN_URLS = ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
+
+export function isTrustedStunUrl(value: string): boolean {
+  return /^stuns?:[A-Za-z0-9._-]+(?::\d{1,5})?$/.test(value.trim());
+}
 
 export function defaultIceServers(): RTCIceServer[] {
   const urls = (import.meta.env.VITE_STUN_URLS as string | undefined)
     ?.split(",")
     .map((u) => u.trim())
-    .filter(Boolean);
-  // Two independent providers: ICE queries all of them in parallel during
-  // gathering, so either one being unreachable costs nothing.
+    .filter(isTrustedStunUrl);
   return [
     {
-      urls: urls?.length ? urls : ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
+      urls: urls?.length ? urls : DEFAULT_STUN_URLS,
     },
   ];
 }
@@ -105,6 +110,7 @@ export class P2PRoom {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private everPolled = false;
+  private signalingToken: string | null = null;
   private lastPeersFingerprint = "";
 
   constructor(opts: P2PRoomOptions) {
@@ -140,7 +146,7 @@ export class P2PRoom {
     // drops this peer and closes their side of the pair.
     void fetch("/api/rtc", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...(this.signalingToken ? { "x-aether-rtc-token": this.signalingToken } : {}) },
       body: JSON.stringify({ op: "leave", room: this.opts.room, peer: this.opts.selfId }),
       keepalive: true,
     }).catch(() => {});
@@ -192,11 +198,16 @@ export class P2PRoom {
       name: this.opts.name ?? "",
       since: String(this.cursor),
     });
-    const res = await fetch(`/api/rtc?${params}`);
+    const res = await fetch(`/api/rtc?${params}`, {
+      headers: this.signalingToken ? { "x-aether-rtc-token": this.signalingToken } : undefined,
+      credentials: "same-origin",
+    });
     if (this.closed) return;
     if (!res.ok) throw new Error(`signaling poll failed: ${res.status}`);
     const body = (await res.json()) as RtcPollResponse;
     if (this.closed) return;
+    if (typeof body.token !== "string" || body.token.length < 32) throw new Error("invalid signaling capability");
+    this.signalingToken = body.token;
     if (!this.everPolled) {
       this.everPolled = true;
       this.opts.onConnected?.();
@@ -450,7 +461,8 @@ export class P2PRoom {
       try {
         const res = await fetch("/api/rtc", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...(this.signalingToken ? { "x-aether-rtc-token": this.signalingToken } : {}) },
+          credentials: "same-origin",
           body: JSON.stringify({
             op: "signal",
             room: this.opts.room,

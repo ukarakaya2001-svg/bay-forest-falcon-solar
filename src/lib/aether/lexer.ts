@@ -21,7 +21,12 @@ const KEYWORDS: Record<string, TokKind> = {
   not: "not",
 };
 
+const MAX_SOURCE_LENGTH = 1_000_000;
+
 export function lex(source: string): Token[] {
+  if (source.length > MAX_SOURCE_LENGTH) {
+    throw new LexError(`Source exceeds the ${MAX_SOURCE_LENGTH}-character limit`, 1, 1);
+  }
   const tokens: Token[] = [];
   let i = 0;
   let line = 1;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { EXAMPLES } from "./examples.ts";
 import { interpret } from "./interpreter.ts";
+import { lex, LexError } from "./lexer.ts";
 import { parse } from "./parser.ts";
 import { transpile } from "./transpile.ts";
 
@@ -103,5 +104,108 @@ test("all examples parse", () => {
   for (const ex of EXAMPLES) {
     const p = parse(ex.code);
     assert.equal(p.ok, true, ex.id);
+  }
+});
+
+test("syntax highlighting escapes HTML metacharacters", async () => {
+  const { highlightAether } = await import("./highlight.ts");
+  const html = highlightAether(`<img src=x onerror="alert(1)">`);
+  assert.match(html, /&lt;\/span>|&lt;/);
+  assert.doesNotMatch(html, /<img\b/i);
+  assert.doesNotMatch(html, /onerror=/i);
+});
+
+test("generated entry points do not duplicate user main", () => {
+  const src = `fn main() { print("hello") }`;
+  for (const target of ["go", "c", "cpp", "rust", "swift", "java", "csharp", "haskell"] as const) {
+    const e = emit(src, target);
+    assert.equal(e.ok, true, target);
+    if (!e.ok) continue;
+    const declarations = (e.code.match(/(?:fn|func|void|int|public static void|static void|function)\s+[Mm]ain\s*\(/g) ?? []);
+    if (target === "haskell") {
+      assert.equal((e.code.match(/^main ::/gm) ?? []).length, 1, target);
+    } else {
+      assert.equal(declarations.length, 1, target);
+    }
+  }
+});
+
+test("omitted function return type is not forced to integer", () => {
+  const src = `fn main() { print("hello") }`;
+  for (const target of ["typescript", "go", "rust", "swift", "kotlin", "php", "dart", "scala"] as const) {
+    const e = emit(src, target);
+    assert.equal(e.ok, true, target);
+    if (!e.ok) continue;
+    assert.doesNotMatch(e.code, /main\([^)]*\)\s*(?::|->|\s+)\s*(number|int|i64|Int|long)\b/);
+  }
+});
+
+test("lua main has no invalid then keyword", () => {
+  const e = emit(`fn main() { print("hello") }`, "lua");
+  assert.equal(e.ok, true);
+  if (e.ok) assert.match(e.code, /function main\(\)\n/);
+});
+
+
+test("lexer rejects oversized source before parsing", () => {
+  assert.throws(() => lex("a".repeat(1_000_001)), (err: unknown) => {
+    assert.ok(err instanceof LexError);
+    assert.match((err as Error).message, /1000000/);
+    return true;
+  });
+});
+
+test("interpreter rejects oversized ranges before allocation", () => {
+  const p = parse(`fn main() { let xs = 0..100001; print(len(xs)) }`);
+  assert.equal(p.ok, true);
+  if (p.ok) {
+    const result = interpret(p.program);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error.message, /Range size limit/);
+  }
+});
+
+test("interpreter bounds output volume", () => {
+  const p = parse(`fn main() { for i in 0..10001 { print(i) } }`);
+  assert.equal(p.ok, true);
+  if (p.ok) {
+    const result = interpret(p.program);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error.message, /Output line limit/);
+  }
+});
+
+test("interpreter renders cyclic values without recursing forever", () => {
+  const p = parse(`fn main() { let xs = [null]; xs[0] = xs; print(xs) }`);
+  assert.equal(p.ok, true);
+  if (p.ok) {
+    const result = interpret(p.program);
+    assert.equal(result.ok, true);
+    if (result.ok) assert.deepEqual(result.output, ["[<cycle>]"]);
+  }
+});
+
+test("entry-point conventions are target-correct for Dart, Scala, and Haskell", () => {
+  const src = `fn main() { print("Hello") }`;
+  const dart = emit(src, "dart");
+  const scala = emit(src, "scala");
+  const haskell = emit(src, "haskell");
+  assert.equal(dart.ok, true);
+  assert.equal(scala.ok, true);
+  assert.equal(haskell.ok, true);
+  if (dart.ok) assert.equal((dart.code.match(/void main\(/g) ?? []).length, 1);
+  if (scala.ok) assert.match(scala.code, /@main def aetherEntry/);
+  if (haskell.ok) assert.match(haskell.code, /putStrLn "Hello"/);
+});
+
+test("all 18 declared targets emit non-empty source", async () => {
+  const { TARGETS } = await import("./targets.ts");
+  const src = `fn main() { print("Hello") }`;
+  const p = parse(src);
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  for (const target of TARGETS) {
+    const code = transpile(p.program, target.id);
+    assert.ok(code.trim().length > 0, target.id);
   }
 });

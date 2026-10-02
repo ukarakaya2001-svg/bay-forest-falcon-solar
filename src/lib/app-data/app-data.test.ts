@@ -38,7 +38,7 @@ async function withStubbedGate(
   body: Record<string, unknown>,
   run: (calls: () => number) => Promise<void>,
 ): Promise<void> {
-  process.env.GROK_CONNECTORS_URL = "https://connectors.invalid.example";
+  process.env.GROK_CONNECTORS_URL = "https://connectors.grok.me";
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -218,7 +218,7 @@ describe("callTool in the workspace preview vs deployed", () => {
 
 describe("callTool", () => {
   it("resolves ok:false for non-serializable args instead of rejecting", async () => {
-    process.env.GROK_CONNECTORS_URL = "https://connectors.invalid.example";
+    process.env.GROK_CONNECTORS_URL = "https://connectors.grok.me";
     try {
       const circular: Record<string, unknown> = {};
       circular.self = circular;

@@ -51,32 +51,31 @@ class Env {
   }
 
   set(name: string, value: Value, line: number, col: number) {
-    let e: Env | null = this;
-    while (e) {
-      const slot = e.values.get(name);
-      if (slot) {
-        if (!slot.mut) throw new RuntimeError(`Cannot assign to const '${name}'`, line, col);
-        slot.value = value;
-        return;
-      }
-      e = e.parent;
+    const slot = this.values.get(name);
+    if (slot) {
+      if (!slot.mut) throw new RuntimeError(`Cannot assign to const '${name}'`, line, col);
+      slot.value = value;
+      return;
     }
-    throw new RuntimeError(`Unknown name '${name}'`, line, col);
+    if (!this.parent) throw new RuntimeError(`Unknown name '${name}'`, line, col);
+    this.parent.set(name, value, line, col);
   }
 
   get(name: string, line: number, col: number): Value {
-    let e: Env | null = this;
-    while (e) {
-      const slot = e.values.get(name);
-      if (slot) return slot.value;
-      e = e.parent;
-    }
-    throw new RuntimeError(`Unknown name '${name}'`, line, col);
+    const slot = this.values.get(name);
+    if (slot) return slot.value;
+    if (!this.parent) throw new RuntimeError(`Unknown name '${name}'`, line, col);
+    return this.parent.get(name, line, col);
   }
 }
 
 const MAX_STEPS = 250_000;
 const MAX_DEPTH = 400;
+const MAX_COLLECTION_ITEMS = 100_000;
+const MAX_OUTPUT_LINES = 10_000;
+const MAX_OUTPUT_CHARS = 1_000_000;
+const MAX_DISPLAY_DEPTH = 100;
+const MAX_STRING_CHARS = 1_000_000;
 
 export function interpret(program: Program): RunResult {
   const output: string[] = [];
@@ -90,7 +89,8 @@ export function interpret(program: Program): RunResult {
     }
   };
 
-  const display = (v: Value): string => {
+  const display = (v: Value, seen = new Set<object>(), depth = 0): string => {
+    if (depth > MAX_DISPLAY_DEPTH) return "<depth-limit>";
     switch (v.t) {
       case "int":
         return String(v.v);
@@ -104,11 +104,19 @@ export function interpret(program: Program): RunResult {
         return v.v ? "true" : "false";
       case "null":
         return "null";
-      case "list":
-        return `[${v.v.map(display).join(", ")}]`;
+      case "list": {
+        if (seen.has(v)) return "<cycle>";
+        seen.add(v);
+        const out = `[${v.v.map((item) => display(item, seen, depth + 1)).join(", ")}]`;
+        seen.delete(v);
+        return out;
+      }
       case "map": {
+        if (seen.has(v)) return "<cycle>";
+        seen.add(v);
         const parts: string[] = [];
-        v.v.forEach((val, key) => parts.push(`${key}: ${display(val)}`));
+        v.v.forEach((val, key) => parts.push(`${key}: ${display(val, seen, depth + 1)}`));
+        seen.delete(v);
         return `{ ${parts.join(", ")} }`;
       }
       case "fn":
@@ -160,7 +168,15 @@ export function interpret(program: Program): RunResult {
   };
 
   native("print", (...args) => {
-    output.push(args.map(display).join(" "));
+    if (output.length >= MAX_OUTPUT_LINES) {
+      throw new RuntimeError("Output line limit reached", 1, 1);
+    }
+    const line = args.map((arg) => display(arg)).join(" ");
+    const nextSize = output.reduce((total, item) => total + item.length + 1, 0) + line.length + 1;
+    if (nextSize > MAX_OUTPUT_CHARS) {
+      throw new RuntimeError("Output size limit reached", 1, 1);
+    }
+    output.push(line);
     return { t: "null" };
   });
   native("str", (v) => {
@@ -213,13 +229,22 @@ export function interpret(program: Program): RunResult {
       case "ident":
         return e.get(expr.name, expr.loc.line, expr.loc.col);
       case "list":
+        if (expr.items.length > MAX_COLLECTION_ITEMS) {
+          throw new RuntimeError("List size limit reached", expr.loc.line, expr.loc.col);
+        }
         return { t: "list", v: expr.items.map((x) => evalExpr(x, e)) };
       case "map": {
+        if (expr.entries.length > MAX_COLLECTION_ITEMS) {
+          throw new RuntimeError("Map size limit reached", expr.loc.line, expr.loc.col);
+        }
         const m = new Map<string, Value>();
         for (const ent of expr.entries) m.set(ent.key, evalExpr(ent.value, e));
         return { t: "map", v: m };
       }
       case "struct": {
+        if (expr.entries.length > MAX_COLLECTION_ITEMS) {
+          throw new RuntimeError("Struct field limit reached", expr.loc.line, expr.loc.col);
+        }
         const m = new Map<string, Value>();
         m.set("__type", { t: "str", v: expr.name });
         for (const ent of expr.entries) m.set(ent.key, evalExpr(ent.value, e));
@@ -230,6 +255,10 @@ export function interpret(program: Program): RunResult {
         const b = num(evalExpr(expr.end, e), expr.loc.line, expr.loc.col);
         const start = Math.trunc(a.v);
         const end = Math.trunc(b.v);
+        const distance = Math.abs(end - start);
+        if (!Number.isSafeInteger(distance) || distance > MAX_COLLECTION_ITEMS) {
+          throw new RuntimeError("Range size limit reached", expr.loc.line, expr.loc.col);
+        }
         const items: Value[] = [];
         if (end >= start) {
           for (let i = start; i < end; i++) items.push({ t: "int", v: i });
@@ -313,13 +342,22 @@ export function interpret(program: Program): RunResult {
       }
       case "+": {
         if (left.t === "str" || right.t === "str") {
-          return { t: "str", v: display(left) + display(right) };
+          const joined = display(left) + display(right);
+          if (joined.length > MAX_STRING_CHARS) {
+            throw new RuntimeError("String size limit reached", line, col);
+          }
+          return { t: "str", v: joined };
         }
         if ((left.t === "int" || left.t === "float") && (right.t === "int" || right.t === "float")) {
           const v = left.v + right.v;
           return left.t === "float" || right.t === "float" ? { t: "float", v } : { t: "int", v };
         }
-        if (left.t === "list" && right.t === "list") return { t: "list", v: [...left.v, ...right.v] };
+        if (left.t === "list" && right.t === "list") {
+          if (left.v.length + right.v.length > MAX_COLLECTION_ITEMS) {
+            throw new RuntimeError("List size limit reached", line, col);
+          }
+          return { t: "list", v: [...left.v, ...right.v] };
+        }
         throw new RuntimeError("Cannot add these values", line, col);
       }
       case "-":
@@ -397,6 +435,10 @@ export function interpret(program: Program): RunResult {
       }
       if (obj.t === "map") {
         const key = idx.t === "str" ? idx.v : display(idx);
+        if (key.length > 1024) throw new RuntimeError("Map key too long", target.loc.line, target.loc.col);
+        if (!obj.v.has(key) && obj.v.size >= MAX_COLLECTION_ITEMS) {
+          throw new RuntimeError("Map size limit reached", target.loc.line, target.loc.col);
+        }
         obj.v.set(key, value);
         return;
       }
@@ -404,6 +446,9 @@ export function interpret(program: Program): RunResult {
     if (target.kind === "member") {
       const obj = evalExpr(target.obj, e);
       if (obj.t !== "map") throw new RuntimeError("Cannot assign a field on this value", target.loc.line, target.loc.col);
+      if (!obj.v.has(target.name) && obj.v.size >= MAX_COLLECTION_ITEMS) {
+        throw new RuntimeError("Struct field limit reached", target.loc.line, target.loc.col);
+      }
       obj.v.set(target.name, value);
       return;
     }

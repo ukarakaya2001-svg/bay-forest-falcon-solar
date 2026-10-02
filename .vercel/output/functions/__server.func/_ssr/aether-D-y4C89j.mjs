@@ -1,5 +1,5 @@
-import { a as LexError, d as targetById, u as lex } from "./highlight-BhGFhx_-.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/aether-D2AFMzg8.js
+import { a as LexError, d as targetById, u as lex } from "./highlight-LGEX9ycG.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/aether-D-y4C89j.js
 var RuntimeError = class extends Error {
 	line;
 	col;
@@ -54,6 +54,11 @@ var Env = class {
 };
 var MAX_STEPS = 25e4;
 var MAX_DEPTH = 400;
+var MAX_COLLECTION_ITEMS = 1e5;
+var MAX_OUTPUT_LINES = 1e4;
+var MAX_OUTPUT_CHARS = 1e6;
+var MAX_DISPLAY_DEPTH = 100;
+var MAX_STRING_CHARS = 1e6;
 function interpret(program) {
 	const output = [];
 	let steps = 0;
@@ -62,7 +67,8 @@ function interpret(program) {
 		steps += 1;
 		if (steps > MAX_STEPS) throw new RuntimeError("Execution limit reached (infinite loop?)", line, col);
 	};
-	const display = (v) => {
+	const display = (v, seen = /* @__PURE__ */ new Set(), depth = 0) => {
+		if (depth > MAX_DISPLAY_DEPTH) return "<depth-limit>";
 		switch (v.t) {
 			case "int": return String(v.v);
 			case "float": {
@@ -72,10 +78,19 @@ function interpret(program) {
 			case "str": return v.v;
 			case "bool": return v.v ? "true" : "false";
 			case "null": return "null";
-			case "list": return `[${v.v.map(display).join(", ")}]`;
+			case "list": {
+				if (seen.has(v)) return "<cycle>";
+				seen.add(v);
+				const out = `[${v.v.map((item) => display(item, seen, depth + 1)).join(", ")}]`;
+				seen.delete(v);
+				return out;
+			}
 			case "map": {
+				if (seen.has(v)) return "<cycle>";
+				seen.add(v);
 				const parts = [];
-				v.v.forEach((val, key) => parts.push(`${key}: ${display(val)}`));
+				v.v.forEach((val, key) => parts.push(`${key}: ${display(val, seen, depth + 1)}`));
+				seen.delete(v);
 				return `{ ${parts.join(", ")} }`;
 			}
 			case "fn": return `<fn ${v.name}>`;
@@ -123,7 +138,10 @@ function interpret(program) {
 		}, false, 1, 1);
 	};
 	native("print", (...args) => {
-		output.push(args.map(display).join(" "));
+		if (output.length >= MAX_OUTPUT_LINES) throw new RuntimeError("Output line limit reached", 1, 1);
+		const line = args.map((arg) => display(arg)).join(" ");
+		if (output.reduce((total, item) => total + item.length + 1, 0) + line.length + 1 > MAX_OUTPUT_CHARS) throw new RuntimeError("Output size limit reached", 1, 1);
+		output.push(line);
 		return { t: "null" };
 	});
 	native("str", (v) => {
@@ -219,11 +237,14 @@ function interpret(program) {
 				};
 				return { t: "null" };
 			case "ident": return e.get(expr.name, expr.loc.line, expr.loc.col);
-			case "list": return {
-				t: "list",
-				v: expr.items.map((x) => evalExpr(x, e))
-			};
+			case "list":
+				if (expr.items.length > MAX_COLLECTION_ITEMS) throw new RuntimeError("List size limit reached", expr.loc.line, expr.loc.col);
+				return {
+					t: "list",
+					v: expr.items.map((x) => evalExpr(x, e))
+				};
 			case "map": {
+				if (expr.entries.length > MAX_COLLECTION_ITEMS) throw new RuntimeError("Map size limit reached", expr.loc.line, expr.loc.col);
 				const m = /* @__PURE__ */ new Map();
 				for (const ent of expr.entries) m.set(ent.key, evalExpr(ent.value, e));
 				return {
@@ -232,6 +253,7 @@ function interpret(program) {
 				};
 			}
 			case "struct": {
+				if (expr.entries.length > MAX_COLLECTION_ITEMS) throw new RuntimeError("Struct field limit reached", expr.loc.line, expr.loc.col);
 				const m = /* @__PURE__ */ new Map();
 				m.set("__type", {
 					t: "str",
@@ -248,6 +270,8 @@ function interpret(program) {
 				const b = num(evalExpr(expr.end, e), expr.loc.line, expr.loc.col);
 				const start = Math.trunc(a.v);
 				const end = Math.trunc(b.v);
+				const distance = Math.abs(end - start);
+				if (!Number.isSafeInteger(distance) || distance > MAX_COLLECTION_ITEMS) throw new RuntimeError("Range size limit reached", expr.loc.line, expr.loc.col);
 				const items = [];
 				if (end >= start) for (let i = start; i < end; i++) items.push({
 					t: "int",
@@ -343,10 +367,14 @@ function interpret(program) {
 				};
 				throw new RuntimeError("Cannot compare these values", line, col);
 			case "+":
-				if (left.t === "str" || right.t === "str") return {
-					t: "str",
-					v: display(left) + display(right)
-				};
+				if (left.t === "str" || right.t === "str") {
+					const joined = display(left) + display(right);
+					if (joined.length > MAX_STRING_CHARS) throw new RuntimeError("String size limit reached", line, col);
+					return {
+						t: "str",
+						v: joined
+					};
+				}
 				if ((left.t === "int" || left.t === "float") && (right.t === "int" || right.t === "float")) {
 					const v = left.v + right.v;
 					return left.t === "float" || right.t === "float" ? {
@@ -357,10 +385,13 @@ function interpret(program) {
 						v
 					};
 				}
-				if (left.t === "list" && right.t === "list") return {
-					t: "list",
-					v: [...left.v, ...right.v]
-				};
+				if (left.t === "list" && right.t === "list") {
+					if (left.v.length + right.v.length > MAX_COLLECTION_ITEMS) throw new RuntimeError("List size limit reached", line, col);
+					return {
+						t: "list",
+						v: [...left.v, ...right.v]
+					};
+				}
 				throw new RuntimeError("Cannot add these values", line, col);
 			case "-":
 			case "*":
@@ -432,6 +463,8 @@ function interpret(program) {
 			}
 			if (obj.t === "map") {
 				const key = idx.t === "str" ? idx.v : display(idx);
+				if (key.length > 1024) throw new RuntimeError("Map key too long", target.loc.line, target.loc.col);
+				if (!obj.v.has(key) && obj.v.size >= MAX_COLLECTION_ITEMS) throw new RuntimeError("Map size limit reached", target.loc.line, target.loc.col);
 				obj.v.set(key, value);
 				return;
 			}
@@ -439,6 +472,7 @@ function interpret(program) {
 		if (target.kind === "member") {
 			const obj = evalExpr(target.obj, e);
 			if (obj.t !== "map") throw new RuntimeError("Cannot assign a field on this value", target.loc.line, target.loc.col);
+			if (!obj.v.has(target.name) && obj.v.size >= MAX_COLLECTION_ITEMS) throw new RuntimeError("Struct field limit reached", target.loc.line, target.loc.col);
 			obj.v.set(target.name, value);
 			return;
 		}
@@ -1122,7 +1156,7 @@ var Emitter = class {
 		this.header(usesPrint);
 		for (const t of types) this.emitType(t);
 		for (const f of fns) {
-			if (this.needsClassWrap() && f.name === "main") continue;
+			if (this.usesGeneratedEntryPoint() && f.name === "main") continue;
 			this.emitFn(f);
 		}
 		const mainBody = hasMain ? fns.find((f) => f.name === "main").body : stmts;
@@ -1151,7 +1185,8 @@ var Emitter = class {
 		else {
 			for (const s of extra) this.emitStmt(s);
 			if (!hasMain) for (const s of stmts) this.emitStmt(s);
-			if (hasMain && this.shouldCallMain()) this.write(this.callMain());
+			if (hasMain && this.d.id === "scala") this.write("@main def aetherEntry(): Unit = main();");
+			else if (hasMain && this.shouldCallMain()) this.write(this.callMain());
 		}
 		this.footer(hasMain);
 		return this.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
@@ -1176,7 +1211,7 @@ var Emitter = class {
 			case "go":
 				this.write("package main");
 				this.write("");
-				this.write(usesPrint ? "import \"fmt\"" : "import \"fmt\"");
+				if (usesPrint) this.write("import \"fmt\"");
 				this.write("");
 				break;
 			case "c":
@@ -1227,6 +1262,7 @@ var Emitter = class {
 			this.write("");
 			this.write("main()");
 		}
+		if (this.d.id === "dart" && hasMain) {}
 		if (this.d.id === "elixir" && hasMain) {
 			this.write("");
 			this.write("main()");
@@ -1235,8 +1271,11 @@ var Emitter = class {
 	needsClassWrap() {
 		return this.d.id === "java" || this.d.id === "csharp";
 	}
+	usesGeneratedEntryPoint() {
+		return this.needsClassWrap() || this.d.id === "go" || this.d.id === "c" || this.d.id === "cpp" || this.d.id === "rust" || this.d.id === "swift" || this.d.id === "haskell";
+	}
 	shouldCallMain() {
-		return this.d.id === "javascript" || this.d.id === "typescript" || this.d.id === "dart" || this.d.id === "php";
+		return this.d.id === "javascript" || this.d.id === "typescript" || this.d.id === "php" || this.d.id === "scala";
 	}
 	callMain() {
 		return `main()${this.semi()}`;
@@ -1284,7 +1323,7 @@ var Emitter = class {
 		if (this.d.id === "swift") this.write("main()");
 	}
 	mapType(t) {
-		if (!t) return this.defaultType();
+		if (!t) return "";
 		return {
 			javascript: {
 				int: "",
@@ -1450,9 +1489,6 @@ var Emitter = class {
 			}
 		}[this.d.id]?.[t] ?? t;
 	}
-	defaultType() {
-		return this.mapType("int") || "";
-	}
 	emitType(t) {
 		const fields = t.fields;
 		switch (this.d.id) {
@@ -1486,7 +1522,7 @@ var Emitter = class {
 				this.write("");
 				return;
 			case "java":
-				this.write(`static class ${t.name} {`);
+				this.write(`class ${t.name} {`);
 				this.i += 1;
 				for (const f of fields) this.write(`${this.mapType(f.type) || "Object"} ${f.name};`);
 				this.i -= 1;
@@ -1591,7 +1627,7 @@ var Emitter = class {
 			return;
 		}
 		if (this.d.family === "end") {
-			const then = this.d.thenWord ? ` ${this.d.thenWord}` : this.d.id === "elixir" ? " do" : "";
+			const then = this.d.id === "elixir" ? " do" : this.d.id === "lua" && /^(if|elseif|while|for)\b/.test(head) ? " then" : "";
 			this.write(`${head}${then}`);
 			this.i += 1;
 			return;
@@ -1983,7 +2019,7 @@ var Emitter = class {
 		const args = expr.args.map((a) => this.emitExpr(a));
 		if (expr.callee.kind === "ident") {
 			const n = expr.callee.name;
-			if (n === "print") return this.emitPrint(args);
+			if (n === "print") return this.emitPrint(args, expr.args);
 			if (n === "str") return this.emitStr(args[0] ?? "\"\"");
 			if (n === "len") return this.emitLen(args[0] ?? "0");
 			if (n === "int") return this.emitIntCast(args[0] ?? "0");
@@ -1993,7 +2029,7 @@ var Emitter = class {
 		}
 		return `${this.emitExpr(expr.callee)}(${args.join(", ")})`;
 	}
-	emitPrint(args) {
+	emitPrint(args, sourceExprs) {
 		const joined = args.join(", ");
 		const spaceJoin = args.join(" + \" \" + ");
 		switch (this.d.id) {
@@ -2019,7 +2055,13 @@ var Emitter = class {
 			case "lua": return "print(" + joined + ")";
 			case "scala": return "println(" + (args.length === 1 ? args[0] : spaceJoin) + ")";
 			case "elixir": return args.length === 1 ? "IO.puts(" + args[0] + ")" : "IO.puts(Enum.join([" + joined + "], \" \"))";
-			case "haskell": return args.length === 1 ? "putStrLn (show " + args[0] + ")" : "putStrLn (unwords [" + args.map((a) => "show " + a).join(", ") + "])";
+			case "haskell": {
+				const rendered = args.map((a, index) => {
+					const source = sourceExprs?.[index];
+					return source?.kind === "literal" && source.raw === "str" ? a : `show ${a}`;
+				});
+				return rendered.length === 1 ? `putStrLn ${rendered[0] ?? "\"\""}` : `putStrLn (unwords [${rendered.join(", ")}])`;
+			}
 			default: return "print(" + joined + ")";
 		}
 	}

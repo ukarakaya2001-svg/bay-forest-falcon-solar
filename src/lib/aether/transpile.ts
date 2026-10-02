@@ -29,7 +29,7 @@ class Emitter {
     this.header(usesPrint);
     for (const t of types) this.emitType(t);
     for (const f of fns) {
-      if (this.needsClassWrap() && f.name === "main") continue;
+      if (this.usesGeneratedEntryPoint() && f.name === "main") continue;
       this.emitFn(f);
     }
 
@@ -65,7 +65,9 @@ class Emitter {
       if (!hasMain) {
         for (const s of stmts) this.emitStmt(s);
       }
-      if (hasMain && this.shouldCallMain()) {
+      if (hasMain && this.d.id === "scala") {
+        this.write("@main def aetherEntry(): Unit = main();")
+      } else if (hasMain && this.shouldCallMain()) {
         this.write(this.callMain());
       }
     }
@@ -96,7 +98,7 @@ class Emitter {
       case "go":
         this.write("package main");
         this.write("");
-        this.write(usesPrint ? 'import "fmt"' : 'import "fmt"');
+        if (usesPrint) this.write('import "fmt"');
         this.write("");
         break;
       case "c":
@@ -153,6 +155,9 @@ class Emitter {
       this.write("");
       this.write("main()");
     }
+    if (this.d.id === "dart" && hasMain) {
+      // Dart already uses the language-level main entry point.
+    }
     if (this.d.id === "elixir" && hasMain) {
       this.write("");
       this.write("main()");
@@ -162,8 +167,20 @@ class Emitter {
   private needsClassWrap() {
     return this.d.id === "java" || this.d.id === "csharp";
   }
+
+  private usesGeneratedEntryPoint() {
+    return (
+      this.needsClassWrap() ||
+      this.d.id === "go" ||
+      this.d.id === "c" ||
+      this.d.id === "cpp" ||
+      this.d.id === "rust" ||
+      this.d.id === "swift" ||
+      this.d.id === "haskell"
+    );
+  }
   private shouldCallMain() {
-    return this.d.id === "javascript" || this.d.id === "typescript" || this.d.id === "dart" || this.d.id === "php";
+    return this.d.id === "javascript" || this.d.id === "typescript" || this.d.id === "php" || this.d.id === "scala";
   }
   private callMain() {
     return `main()${this.semi()}`;
@@ -219,7 +236,7 @@ class Emitter {
   }
 
   private mapType(t: string | null): string {
-    if (!t) return this.defaultType();
+    if (!t) return "";
     const table: Record<string, Record<string, string>> = {
       javascript: { int: "", float: "", str: "", bool: "", void: "", list: "", map: "" },
       typescript: { int: "number", float: "number", str: "string", bool: "boolean", void: "void", list: "any[]", map: "Record<string, any>" },
@@ -244,10 +261,6 @@ class Emitter {
     return row?.[t] ?? t;
   }
 
-  private defaultType() {
-    const t = this.mapType("int");
-    return t || "";
-  }
 
   private emitType(t: TypeDecl) {
     const fields = t.fields;
@@ -282,7 +295,7 @@ class Emitter {
         this.write("");
         return;
       case "java":
-        this.write(`static class ${t.name} {`);
+        this.write(`class ${t.name} {`);
         this.i += 1;
         for (const f of fields) this.write(`${this.mapType(f.type) || "Object"} ${f.name};`);
         this.i -= 1;
@@ -353,7 +366,7 @@ class Emitter {
       case "cpp":
         return `${ret || "void"} ${name}(${params || "void"})`;
       case "java":
-        return `${asStatic || true ? "static " : ""}${ret || "void"} ${name}(${params})`;
+        return `static ${ret || "void"} ${name}(${params})`;
       case "csharp":
         return `static ${ret || "void"} ${name}(${params})`;
       case "ruby":
@@ -415,7 +428,11 @@ class Emitter {
       return;
     }
     if (this.d.family === "end") {
-      const then = this.d.thenWord ? ` ${this.d.thenWord}` : this.d.id === "elixir" ? " do" : "";
+      const then = this.d.id === "elixir"
+        ? " do"
+        : this.d.id === "lua" && /^(if|elseif|while|for)\b/.test(head)
+          ? " then"
+          : "";
       this.write(`${head}${then}`);
       this.i += 1;
       return;
@@ -860,7 +877,7 @@ class Emitter {
     const args = expr.args.map((a) => this.emitExpr(a));
     if (expr.callee.kind === "ident") {
       const n = expr.callee.name;
-      if (n === "print") return this.emitPrint(args);
+      if (n === "print") return this.emitPrint(args, expr.args);
       if (n === "str") return this.emitStr(args[0] ?? '""');
       if (n === "len") return this.emitLen(args[0] ?? "0");
       if (n === "int") return this.emitIntCast(args[0] ?? "0");
@@ -871,7 +888,7 @@ class Emitter {
     return `${this.emitExpr(expr.callee)}(${args.join(", ")})`;
   }
 
-  private emitPrint(args: string[]): string {
+  private emitPrint(args: string[], sourceExprs?: Expr[]): string {
     const joined = args.join(", ");
     const spaceJoin = args.join(' + " " + ');
     switch (this.d.id) {
@@ -917,10 +934,15 @@ class Emitter {
         return args.length === 1
           ? "IO.puts(" + args[0] + ")"
           : "IO.puts(Enum.join([" + joined + '], " "))';
-      case "haskell":
-        return args.length === 1
-          ? "putStrLn (show " + args[0] + ")"
-          : "putStrLn (unwords [" + args.map((a) => "show " + a).join(", ") + "])";
+      case "haskell": {
+        const rendered = args.map((a, index) => {
+          const source = sourceExprs?.[index];
+          return source?.kind === "literal" && source.raw === "str" ? a : `show ${a}`;
+        });
+        return rendered.length === 1
+          ? `putStrLn ${rendered[0] ?? "\"\""}`
+          : `putStrLn (unwords [${rendered.join(", ")}])`;
+      }
       default:
         return "print(" + joined + ")";
     }
